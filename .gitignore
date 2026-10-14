@@ -1,0 +1,13 @@
+# Dependencies
+node_modules/
+
+# Cloudflare / wrangler
+.wrangler/
+.dev.vars
+dist/
+
+# Editors and OS
+.DS_Store
+*.log
+.idea/
+.vscode/

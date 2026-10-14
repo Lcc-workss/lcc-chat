@@ -6,7 +6,9 @@ settings:
 
 importers:
 
-  .:
+  .: {}
+
+  server:
     dependencies:
       zod:
         specifier: ^4.6.7

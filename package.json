@@ -1,0 +1,18 @@
+{
+  "name": "lcc-chat",
+  "version": "1.0.0",
+  "private": true,
+  "description": "lcc-chat — realtime chat with no sign-up (Cloudflare Workers + static client)",
+  "scripts": {
+    "dev": "pnpm --filter lcc-chat-server dev",
+    "client": "python3 -m http.server 5173 --bind 0.0.0.0 --directory client",
+    "build": "pnpm --filter lcc-chat-server typecheck",
+    "deploy": "pnpm --filter lcc-chat-server deploy",
+    "test": "pnpm --filter lcc-chat-server test",
+    "test:browser": "pnpm --filter lcc-chat-server test:browser",
+    "typecheck": "pnpm --filter lcc-chat-server typecheck"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

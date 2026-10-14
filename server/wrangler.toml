@@ -29,24 +29,30 @@ new_sqlite_classes = ["ChatRoom", "UserSession", "Presence"]
 # then paste the returned id below.
 [[kv_namespaces]]
 binding = "PROFILES"
+# Local development (`pnpm dev`) works with this placeholder as-is.
+# For a real deployment create one namespace and replace the id:
+#   pnpm --filter lcc-chat-server kv:create
 id = "replace-with-your-kv-namespace-id"
 
 # ---------------------------------------------------------------- Vars
+# Everything below is optional: lcc-chat runs with no API keys and no secrets.
 [vars]
-# Long random string. Set it properly with:  wrangler secret put TOKEN_SECRET
-# (Left empty so local `wrangler dev` works; the server falls back to a
-#  clearly-labelled development secret and warns you.)
+# Optional. Signs session tokens. When empty the Worker generates a secret per
+# isolate, so sessions reset on restart. Set it for a stable deployment with:
+#   wrangler secret put TOKEN_SECRET
 TOKEN_SECRET = ""
 
-# WebRTC ICE configuration. TURN is optional in development but required in
-# production. Never hardcode real TURN credentials in /client — the Worker
-# serves them to authenticated clients from `/api/media/config`.
-# Recommended: wrangler secret put TURN_URL / TURN_USERNAME / TURN_CREDENTIAL
+# WebRTC ICE. STUN works out of the box; TURN is only needed when direct peer
+# connections fail. If you add one, keep it in secrets (never in /client) —
+# authenticated browsers fetch it from `/api/media/config`:
+#   wrangler secret put TURN_URL
+#   wrangler secret put TURN_USERNAME
+#   wrangler secret put TURN_CREDENTIAL
 STUN_URLS = "stun:stun.l.google.com:19302"
 
-# PeerJS signaling. Leave PEER_HOST empty to use the public PeerJS Cloud
-# (development only). For production self-host PeerServer and set e.g.
-# PEER_HOST = "peer.internal.example.com" and PEER_SECURE = "true".
+# PeerJS signalling. Empty PEER_HOST uses the free public PeerJS Cloud, which is
+# fine for development and small groups. For production self-host PeerServer and
+# set PEER_HOST / PEER_PORT / PEER_PATH / PEER_SECURE.
 PEER_HOST = ""
 PEER_PORT = "443"
 PEER_PATH = "/"

@@ -1,0 +1,15 @@
+# pnpm workspace root for lcc-chat.
+#
+# `onlyBuiltDependencies` (pnpm 10/11) and `allowBuilds` (pnpm 12+) both allow the
+# postinstall scripts that wrangler's toolchain needs: `workerd` links the local
+# runtime binary and `esbuild` installs its platform package.
+packages:
+  - server
+
+onlyBuiltDependencies:
+  - esbuild
+  - workerd
+
+allowBuilds:
+  esbuild: true
+  workerd: true

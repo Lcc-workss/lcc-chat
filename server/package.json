@@ -9,7 +9,6 @@
     "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit",
     "kv:create": "wrangler kv namespace create PROFILES",
-    "secret": "wrangler secret put TOKEN_SECRET",
     "test": "node test/run.mjs",
     "test:browser": "node test/run.mjs --browser"
   },

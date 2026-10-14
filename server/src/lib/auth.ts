@@ -14,7 +14,6 @@ import type { Env } from "./types";
 
 const TOKEN_VERSION = "lcc1";
 const TOKEN_TTL_SECONDS = 60 * 60 * 24 * 90; // 90 days
-const DEV_FALLBACK_SECRET = "lcc-chat-development-secret-do-not-use-in-production";
 
 export interface TokenClaims {
   /** user id */
@@ -28,19 +27,29 @@ export interface TokenClaims {
 const encoder = new TextEncoder();
 
 let warnedAboutSecret = false;
+/**
+ * Used when no `TOKEN_SECRET` is configured: generated once per isolate so
+ * lcc-chat runs with zero setup. Sessions simply reset when the Worker restarts;
+ * set a real secret (`wrangler secret put TOKEN_SECRET`) to keep them.
+ */
+let ephemeralSecret = "";
 
 export function authSecret(env: Env): string {
   const secret = env.TOKEN_SECRET?.trim();
   if (secret && secret.length >= 16) return secret;
-  if (!warnedAboutSecret) {
-    warnedAboutSecret = true;
-    console.warn(
-      "[lcc-chat] TOKEN_SECRET is not set (or shorter than 16 chars). Using a development " +
-        "fallback secret — every token is invalidated when the isolate restarts. " +
-        "Run `wrangler secret put TOKEN_SECRET` before deploying.",
-    );
+
+  if (!ephemeralSecret) {
+    ephemeralSecret = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
+    if (!warnedAboutSecret) {
+      warnedAboutSecret = true;
+      console.warn(
+        "[lcc-chat] TOKEN_SECRET is not set — using an automatically generated secret, so sessions " +
+          "reset whenever the Worker restarts. Run `wrangler secret put TOKEN_SECRET` for a stable " +
+          "deployment (optional: lcc-chat works without it).",
+      );
+    }
   }
-  return DEV_FALLBACK_SECRET;
+  return ephemeralSecret;
 }
 
 function toBase64Url(bytes: Uint8Array): string {

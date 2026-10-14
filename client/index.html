@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="description" content="lcc-chat — no sign-up chat with DMs, group chats, presence and peer-to-peer calls." />
+    <title>lcc-chat</title>
+
+    <link rel="stylesheet" href="./assets/styles.css" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%236366f1'/%3E%3Cpath d='M18 24h28a6 6 0 0 1 6 6v12a6 6 0 0 1-6 6H30l-12 8v-8a2 2 0 0 1-2-2V30a2 2 0 0 1 2-2z' fill='%23fff'/%3E%3C/svg%3E"
+    />
+
+    <!-- PeerJS: signalling only. One-to-one calls use it; group calls mesh over our own relay. -->
+    <script src="https://unpkg.com/peerjs@1.5.5/dist/peerjs.min.js" defer></script>
+  </head>
+  <body>
+    <div id="app" class="app" data-state="boot">
+      <header class="boot" id="boot">
+        <div class="boot__mark" aria-hidden="true"></div>
+        <p class="boot__text">Starting lcc-chat…</p>
+      </header>
+    </div>
+
+    <div id="modal-root"></div>
+    <div id="toast-root" class="toast-root" role="status" aria-live="polite"></div>
+
+    <template id="tpl-shell">
+      <aside class="sidebar">
+        <header class="sidebar__header">
+          <button class="avatar avatar--lg" id="me-avatar" type="button" title="Your profile"></button>
+          <div class="sidebar__identity">
+            <span class="sidebar__name" id="me-name"></span>
+            <span class="sidebar__status" id="connection-status">connecting…</span>
+          </div>
+          <button class="icon-button" id="open-settings" type="button" title="Settings" aria-label="Settings">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z"/><path d="M19.4 13a7.9 7.9 0 0 0 0-2l2-1.5-2-3.4-2.4 1a7.7 7.7 0 0 0-1.7-1L15 3.5H9l-.3 2.6a7.7 7.7 0 0 0-1.7 1l-2.4-1-2 3.4L4.6 11a7.9 7.9 0 0 0 0 2l-2 1.5 2 3.4 2.4-1a7.7 7.7 0 0 0 1.7 1l.3 2.6h6l.3-2.6a7.7 7.7 0 0 0 1.7-1l2.4 1 2-3.4-2-1.5Z"/></svg>
+          </button>
+        </header>
+
+        <div class="sidebar__actions">
+          <button class="button button--primary" id="new-chat" type="button">New chat</button>
+          <label class="search">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="m20 20-3.5-3.5"/></svg>
+            <input id="filter-conversations" type="search" placeholder="Filter chats" aria-label="Filter chats" autocomplete="off" />
+          </label>
+        </div>
+
+        <nav class="conversation-list" id="conversation-list" aria-label="Conversations"></nav>
+
+        <footer class="sidebar__footer">
+          <span class="pill pill--muted" id="worker-pill" title="Connected Worker">…</span>
+        </footer>
+      </aside>
+
+      <main class="chat" id="chat">
+        <section class="chat__empty" id="chat-empty">
+          <div class="chat__empty-mark" aria-hidden="true"></div>
+          <h1>lcc-chat</h1>
+          <p>No sign-up, no password — pick a name and start talking.<br />Pick a conversation or start a new one.</p>
+        </section>
+
+        <section class="chat__panel" id="chat-panel" hidden>
+          <header class="chat__header">
+            <button class="icon-button chat__back" id="chat-back" type="button" aria-label="Back to chats">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg>
+            </button>
+            <div class="chat__avatar" id="chat-avatar" aria-hidden="true"></div>
+            <div class="chat__title">
+              <strong id="chat-name"></strong>
+              <span id="chat-presence" class="chat__presence"></span>
+            </div>
+            <div class="chat__actions">
+              <button class="icon-button" id="start-audio" type="button" title="Start audio call" aria-label="Start audio call">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.6 10.8a15 15 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.24 11.4 11.4 0 0 0 3.6.58 1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1 11.4 11.4 0 0 0 .58 3.6 1 1 0 0 1-.25 1l-2.23 2.2Z"/></svg>
+              </button>
+              <button class="icon-button" id="start-video" type="button" title="Start video call" aria-label="Start video call">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="12" height="12" rx="2.5"/><path d="m15 11 6-3.5v9L15 13"/></svg>
+              </button>
+              <button class="icon-button" id="open-people" type="button" title="People" aria-label="People">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.2"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0"/><path d="M16 11.2a3 3 0 1 0-1.6-5.5M16.5 19a5.6 5.6 0 0 0-1.1-3.2 4 4 0 0 1 5.1 1.6"/></svg>
+              </button>
+              <button class="icon-button" id="leave-call" type="button" title="Leave call" aria-label="Leave call" hidden>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5c5-4 13-4 18 0l-2.2 3.4-3.3-1.1v-2a13 13 0 0 0-7 0v2l-3.3 1.1L3 10.5Z"/></svg>
+              </button>
+            </div>
+          </header>
+
+          <div class="messages" id="messages" tabindex="0">
+            <button class="messages__more" id="load-older" type="button" hidden>Load earlier messages</button>
+            <div class="messages__list" id="message-list"></div>
+          </div>
+
+          <div class="typing" id="typing" hidden></div>
+
+          <div class="composer">
+            <button class="icon-button composer__emoji" id="emoji-toggle" type="button" title="Emoji" aria-label="Emoji">🙂</button>
+            <textarea
+              id="composer-input"
+              rows="1"
+              placeholder="Write a message…"
+              aria-label="Write a message"
+              maxlength="4000"
+            ></textarea>
+            <button class="button button--primary composer__send" id="composer-send" type="button" aria-label="Send">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.4 20.4 21 12 3.4 3.6 3.4 10l12 2-12 2z"/></svg>
+            </button>
+          </div>
+        </section>
+      </main>
+    </template>
+
+    <template id="tpl-call">
+      <div class="call" role="dialog" aria-modal="true" aria-label="Call">
+        <div class="call__stage" id="call-stage"></div>
+        <div class="call__bar">
+          <span class="call__state" id="call-state">connecting</span>
+          <span class="call__title" id="call-title"></span>
+          <div class="call__controls">
+            <button class="icon-button" id="call-mic" type="button" title="Mute microphone" aria-label="Mute microphone">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+            </button>
+            <button class="icon-button" id="call-cam" type="button" title="Turn camera off" aria-label="Turn camera off">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="12" height="12" rx="2.5"/><path d="m15 11 6-3.5v9L15 13"/></svg>
+            </button>
+            <button class="icon-button" id="call-screen" type="button" title="Share screen" aria-label="Share screen">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M9 20h6M12 16v4"/></svg>
+            </button>
+            <button class="icon-button icon-button--danger" id="call-hangup" type="button" title="Leave call" aria-label="Leave call">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5c5-4 13-4 18 0l-2.2 3.4-3.3-1.1v-2a13 13 0 0 0-7 0v2l-3.3 1.1L3 10.5Z"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </template>
+
+    <script type="module" src="./src/app.js"></script>
+  </body>
+</html>
