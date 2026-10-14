@@ -2,21 +2,30 @@ import { el, qs } from "./dom.js";
 
 /** Tiny toast + modal helpers used across the UI. */
 
-export function toast(message, { kind = "info", timeout = 4200, action } = {}) {
+/**
+ * Show a toast. Repeating the same message within `DEDUPE_MS` refreshes the
+ * existing toast instead of stacking a new one — a reconnect loop must not
+ * bury the screen in identical warnings.
+ */
+export function toast(message, { kind = "info", timeout = 4200, action, dedupe = 4000 } = {}) {
   const root = qs("#toast-root");
   if (!root) return;
 
-  const node = el("div", { class: `toast toast--${kind}`, role: "status" }, [
+  const existing = dedupe > 0 ? root.querySelector(`.toast[data-message="${cssEscape(message)}"]`) : null;
+  if (existing) {
+    clearTimeout(existing.__timer);
+    existing.classList.remove("toast--leaving");
+    existing.__timer = setTimeout(() => dismissToast(existing), timeout);
+    return;
+  }
+
+  const node = el("div", { class: `toast toast--${kind}`, role: "status", dataset: { message } }, [
     el("span", { class: "toast__text", text: message }),
     action ? el("button", { class: "toast__action", type: "button", text: action.label }) : null,
   ]);
 
   let timer = null;
-  const dismiss = () => {
-    clearTimeout(timer);
-    node.classList.add("toast--leaving");
-    setTimeout(() => node.remove(), 200);
-  };
+  const dismiss = () => dismissToast(node);
 
   if (action) {
     qs(".toast__action", node).addEventListener("click", () => {
@@ -30,7 +39,19 @@ export function toast(message, { kind = "info", timeout = 4200, action } = {}) {
   });
 
   root.append(node);
-  timer = setTimeout(dismiss, timeout);
+  node.__timer = setTimeout(dismiss, timeout);
+}
+
+function dismissToast(node) {
+  clearTimeout(node.__timer);
+  node.classList.add("toast--leaving");
+  setTimeout(() => node.remove(), 200);
+}
+
+/** Small helper that works in every browser lcc-chat targets. */
+function cssEscape(value) {
+  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") return CSS.escape(value);
+  return String(value).replace(/["\\]/g, "\\$&");
 }
 
 /**

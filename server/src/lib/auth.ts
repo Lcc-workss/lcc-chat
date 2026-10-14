@@ -26,30 +26,31 @@ export interface TokenClaims {
 
 const encoder = new TextEncoder();
 
-let warnedAboutSecret = false;
 /**
- * Used when no `TOKEN_SECRET` is configured: generated once per isolate so
- * lcc-chat runs with zero setup. Sessions simply reset when the Worker restarts;
- * set a real secret (`wrangler secret put TOKEN_SECRET`) to keep them.
+ * Development fallback used when no `TOKEN_SECRET` is configured.
+ *
+ * It is a fixed, clearly-labelled constant on purpose: lcc-chat must run with
+ * zero configuration, and a secret that changed on every Worker restart would
+ * silently sign everybody out on each deploy. Set a real secret with
+ * `wrangler secret put TOKEN_SECRET` before exposing lcc-chat to the internet.
  */
-let ephemeralSecret = "";
+const DEV_SECRET = "lcc-chat-development-secret-not-for-production";
+
+let warnedAboutSecret = false;
 
 export function authSecret(env: Env): string {
   const secret = env.TOKEN_SECRET?.trim();
   if (secret && secret.length >= 16) return secret;
 
-  if (!ephemeralSecret) {
-    ephemeralSecret = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
-    if (!warnedAboutSecret) {
-      warnedAboutSecret = true;
-      console.warn(
-        "[lcc-chat] TOKEN_SECRET is not set — using an automatically generated secret, so sessions " +
-          "reset whenever the Worker restarts. Run `wrangler secret put TOKEN_SECRET` for a stable " +
-          "deployment (optional: lcc-chat works without it).",
-      );
-    }
+  if (!warnedAboutSecret) {
+    warnedAboutSecret = true;
+    console.warn(
+      "[lcc-chat] TOKEN_SECRET is not set — using the built-in development secret. Sessions survive " +
+        "restarts, but anyone can forge tokens: run `wrangler secret put TOKEN_SECRET` before " +
+        "deploying lcc-chat publicly.",
+    );
   }
-  return ephemeralSecret;
+  return DEV_SECRET;
 }
 
 function toBase64Url(bytes: Uint8Array): string {

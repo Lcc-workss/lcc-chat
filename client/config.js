@@ -18,10 +18,10 @@
  * `FALLBACK_WORKER_URL` so local development always works. The fallback is
  * reported in the console and in the sidebar.
  */
-const DEFAULT_WORKER_URL = "https://silver-goggles-qv6qx55qqpq7f69w4-8787.app.github.dev/";
+const DEFAULT_WORKER_URL = "https://lcc-chattest.catboxfat.workers.dev/";
 
 /** Where `pnpm dev` listens inside this machine. */
-const FALLBACK_WORKER_URL = "http://127.0.0.1:8787";
+const FALLBACK_WORKER_URL = "https://lcc-chattest.catboxfat.workers.dev/";
 
 const OVERRIDE_KEY = "lcc-chat.worker";
 const ACTIVE_KEY = "lcc-chat.worker.active";

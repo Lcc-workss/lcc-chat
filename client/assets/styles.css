@@ -650,6 +650,21 @@ textarea {
   scroll-behavior: smooth;
 }
 
+.chat__banner {
+  padding: 9px 16px;
+  text-align: center;
+  font-size: 13px;
+  background: rgba(245, 158, 11, 0.14);
+  border-bottom: 1px solid rgba(245, 158, 11, 0.35);
+  color: var(--warn);
+}
+
+.chat__banner--error {
+  background: rgba(239, 68, 68, 0.14);
+  border-color: rgba(239, 68, 68, 0.4);
+  color: var(--danger);
+}
+
 .messages__more {
   display: block;
   margin: 0 auto 14px;

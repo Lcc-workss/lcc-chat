@@ -37,6 +37,7 @@ class App {
     this.hubSocket = null;
     this.pendingTypingStop = null;
     this.lastTypingSentAt = 0;
+    this.revalidating = false;
   }
 
   /* --------------------------------------------------------- lifecycle */
@@ -141,9 +142,14 @@ class App {
     const token = getToken();
     this.roomSocket = new RealtimeSocket({
       url: `${activeWsBaseUrl()}/ws?conversationId=${encodeURIComponent(conversationId)}&token=${encodeURIComponent(token ?? "")}`,
+      ping: true,
       onState: (state) => {
         qs("#chat-panel")?.classList.toggle("chat__panel--offline", state !== ConnectionState.OPEN);
-        if (state === ConnectionState.FAILED) toast("This conversation is disconnected.", { kind: "error" });
+        this.#setConnectionHint();
+        if (state === ConnectionState.FAILED) {
+          toast("This conversation lost its connection. Retrying…", { kind: "error", timeout: 6000 });
+          this.#revalidateSession();
+        }
       },
       onEvent: (event) => this.#onRoomEvent(event),
     });
@@ -279,6 +285,8 @@ class App {
     switch (event.type) {
       case "ready": {
         // Re-sync after a reconnect so nothing is missed while we were away.
+        this.#flushQueued();
+        this.#setConnectionHint();
         this.#refreshActiveThread().catch(() => undefined);
         return;
       }
@@ -372,9 +380,10 @@ class App {
     }
 
     if (payload?.kind === "state") {
-      // Mesh calls negotiate as soon as both sides are in the room; PeerJS
-      // one-to-one calls carry their own signalling, so nothing to do there.
-      if (inCall && isMesh) this.media.handleSignal(fromUserId, payload);
+      // Relay-based calls (groups, and one-to-one when PeerJS is unreachable)
+      // negotiate as soon as both sides are in the room. A live PeerJS call
+      // carries its own signalling, so nothing to do there.
+      if (inCall && (isMesh || this.media.usesRelay)) this.media.handleSignal(fromUserId, payload);
       else if (!inCall) {
         this.media.invitedBy = fromUserId; // connect straight away when they join
         toast(`${this.userName(fromUserId)} started a ${payload.media} call.`, {
@@ -516,21 +525,81 @@ class App {
       senderId: this.state.get().me.id,
       content,
       createdAt: new Date().toISOString(),
-      status: "pending",
+      status: this.roomSocket?.isConnected ? "pending" : "queued",
       clientMessageId,
     };
 
     const state = this.state.get();
     const thread = state.messages[conversationId] ?? { messages: [], hasMore: false, cursor: null };
-    this.state.set({ messages: { ...state.messages, [conversationId]: { ...thread, messages: [...thread.messages, optimistic] } } });
+    this.state.set({
+      messages: { ...state.messages, [conversationId]: { ...thread, messages: [...thread.messages, optimistic] } },
+    });
     this.chat?.render(this.state.get());
+    this.chat?.scrollToBottom(true);
 
-    const sent = this.roomSocket?.send({ type: "message.send", conversationId, content, clientMessageId }) ?? false;
+    if (!this.roomSocket?.isConnected) {
+      // Not connected (or half-open): keep the message, start reconnecting and
+      // flush it as soon as the socket is back.
+      this.roomSocket?.forceReconnect("sending while offline");
+      this.#setConnectionHint();
+      return true;
+    }
+
+    this.#sendOptimistic(optimistic);
+    return true;
+  }
+
+  /** Put a queued/pending message on the wire. */
+  #sendOptimistic(message) {
+    const sent = this.roomSocket?.send({
+      type: "message.send",
+      conversationId: message.conversationId,
+      content: message.content,
+      clientMessageId: message.clientMessageId,
+    });
     if (!sent) {
-      this.#patchMessage(conversationId, clientMessageId, { status: "failed" });
+      this.#patchMessage(message.conversationId, message.id, { status: "queued" });
       this.chat?.render(this.state.get());
     }
-    return sent;
+  }
+
+  /** Re-send everything that was queued while the socket was down. */
+  #flushQueued() {
+    const state = this.state.get();
+    for (const [conversationId, thread] of Object.entries(state.messages)) {
+      for (const message of thread.messages) {
+        if (message.status === "queued" && message.senderId === state.me.id) {
+          this.#sendOptimistic({ ...message, conversationId });
+        }
+      }
+    }
+  }
+
+  /** Show one banner instead of a toast per attempt. */
+  #setConnectionHint() {
+    const banner = qs("#chat-banner");
+    if (!banner) return;
+    const connected = this.roomSocket?.isConnected === true;
+    const pending = Object.values(this.state.get().messages).flatMap((thread) => thread.messages).filter(
+      (message) => message.status === "queued" || message.status === "pending",
+    ).length;
+
+    if (connected && pending === 0) {
+      banner.hidden = true;
+      banner.textContent = "";
+      return;
+    }
+
+    banner.hidden = false;
+    banner.classList.toggle("chat__banner--error", this.roomSocket?.state === ConnectionState.FAILED);
+    banner.textContent = connected
+      ? "Connected — sending…"
+      : `Reconnecting… ${pending > 0 ? `${pending} message${pending > 1 ? "s" : ""} waiting to send.` : "your messages will send automatically."}`;
+  }
+
+  /** Exposed so the chat view can render the same banner. */
+  connectionHint() {
+    this.#setConnectionHint();
   }
 
   /** Edit is optimistic: the bubble updates immediately, then reconciles. */
@@ -679,6 +748,29 @@ class App {
     } catch {
       /* notifications are best-effort */
     }
+  }
+
+  /**
+   * A dead socket often means the session itself is gone (restarted Worker with
+   * a new secret, cleared storage). Check once and restart cleanly instead of
+   * retrying forever.
+   */
+  #revalidateSession() {
+    if (this.revalidating) return;
+    this.revalidating = true;
+    api
+      .me()
+      .then(() => {
+        this.revalidating = false;
+      })
+      .catch((error) => {
+        this.revalidating = false;
+        if (error?.status === 401) {
+          toast("Your session expired — pick a name to start a new one.", { kind: "warn", timeout: 6000 });
+          setToken(null);
+          setTimeout(() => location.reload(), 1200);
+        }
+      });
   }
 
   updateMe(user) {

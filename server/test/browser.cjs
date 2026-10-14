@@ -113,6 +113,31 @@ const hasText = (page, text) =>
     timeout: 15_000,
   });
 
+/** Record call signalling on a page so failures can be explained. */
+async function traceCalls(page, label) {
+  await page.evaluate((name) => {
+    const app = window.lccChat;
+    window.__callLog = [];
+    const media = app.media;
+    const handle = media.handleSignal.bind(media);
+    media.handleSignal = async (from, payload) => {
+      const before = media.mesh.get(from);
+      window.__callLog.push(`${name} <- ${payload.kind} ${from.slice(-4)} pc=${before ? before.signalingState : "none"}`);
+      const result = await handle(from, payload);
+      const after = media.mesh.get(from);
+      window.__callLog.push(`${name}    ${payload.kind} pc=${after ? after.signalingState : "gone"}`);
+      return result;
+    };
+    const send = app.sendCallSignal.bind(app);
+    app.sendCallSignal = (to, payload) => {
+      window.__callLog.push(`${name} -> ${payload.kind} ${to.slice(-4)}`);
+      return send(to, payload);
+    };
+  }, label);
+}
+
+const callLog = (page) => page.evaluate(() => window.__callLog ?? []);
+
 async function main() {
   const browser = await chromium.launch({
     args: ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream", "--no-sandbox"],
@@ -259,6 +284,91 @@ async function main() {
   ok("caller overlay closes", (await alice.locator(".call").count()) === 0);
   await sleep(bob, 4000);
   ok("callee overlay closes too", (await bob.locator(".call").count()) === 0);
+
+  section("offline: messages queue instead of failing");
+  const contextA = alice.context();
+  // Kill the room socket the way a dropped tunnel / sleeping laptop would.
+  await alice.evaluate(() => window.lccChat.roomSocket.socket.close(4000, "test drop"));
+  await alice.waitForFunction(() => window.lccChat.roomSocket?.isOpen === false, null, { timeout: 15_000 });
+  await contextA.setOffline(true);
+
+  await send(alice, "queued message one");
+  await send(alice, "queued message two");
+  await alice.waitForFunction(
+    () => document.querySelector("#chat-banner") && !document.querySelector("#chat-banner").hidden,
+    null,
+    { timeout: 15_000 },
+  );
+  ok("a reconnect banner is shown", (await alice.textContent("#chat-banner")).includes("Reconnecting"));
+  ok("no message is marked as failed", (await alice.locator(".message--failed").count()) === 0);
+  ok("queued messages are marked queued", (await alice.locator(".message__edited").allTextContents()).includes("queued"));
+  ok("no 'not sent' toast spam", (await alice.locator(".toast", { hasText: /not sent/i }).count()) === 0);
+
+  await contextA.setOffline(false);
+  await alice.evaluate(() => window.lccChat.roomSocket.retryNow());
+  await bob.waitForFunction(
+    () => document.querySelector("#message-list")?.textContent?.includes("queued message two"),
+    null,
+    { timeout: 60_000 },
+  );
+  ok("queued messages flush automatically after reconnect", true);
+  await alice.waitForFunction(
+    () => document.querySelectorAll(".message--failed").length === 0 && document.querySelector("#chat-banner").hidden,
+    null,
+    { timeout: 30_000 },
+  );
+  ok("the banner clears once back online", true);
+
+  section("calls still work when PeerJS signalling is blocked");
+  const carolContext = carol.context();
+  await carolContext.route("**/peerjs*", (route) => route.abort());
+  await carol.reload({ waitUntil: "domcontentloaded" });
+  await carol.waitForSelector('.app[data-state="ready"]', { timeout: 20_000 });
+  await waitForConversation(carol, groupTitle);
+  await openConversation(carol, groupTitle);
+  await carol.evaluate(() => {
+    window.lccChat.media.signalling = null; // force a fresh attempt
+  });
+
+  await carol.click("#start-video");
+  await carol.waitForSelector(".call", { timeout: 15_000 });
+  await traceCalls(carol, "carol");
+  await traceCalls(bob, "bob");
+  await traceCalls(alice, "alice");
+  await carol.evaluate(() => {
+    window.lccChat.media.signalling = null; // force a fresh attempt
+  });
+  const relayInvite = bob.locator(".toast", { hasText: /started a/i }).locator(".toast__action").last();
+  await relayInvite.waitFor({ timeout: 30_000 }).catch(() => undefined);
+  ok("invite still arrives without PeerJS", await relayInvite.isVisible().catch(() => false));
+  if (await relayInvite.isVisible().catch(() => false)) await relayInvite.click();
+  await bob.waitForSelector(".call", { timeout: 20_000 }).catch(() => undefined);
+  await bob.locator(".call__tile[data-remote]").first().waitFor({ timeout: 40_000 }).catch(() => undefined);
+  const relayState = await bob.evaluate(() => {
+    const [id, connection] = [...(window.lccChat.media.mesh ?? new Map())][0] ?? [];
+    return {
+      state: window.lccChat.media.state,
+      usesRelay: window.lccChat.media.usesRelay,
+      mesh: window.lccChat.media.mesh.size,
+      peer: connection ? `${id}:${connection.connectionState}/${connection.iceConnectionState}` : "none",
+    };
+  });
+  const carolState = await carol.evaluate(() => {
+    const [id, connection] = [...(window.lccChat.media.mesh ?? new Map())][0] ?? [];
+    return {
+      state: window.lccChat.media.state,
+      usesRelay: window.lccChat.media.usesRelay,
+      mesh: window.lccChat.media.mesh.size,
+      peer: connection ? `${id}:${connection.connectionState}/${connection.iceConnectionState}` : "none",
+    };
+  });
+  ok(
+    "media flows over lcc-chat's own relay",
+    (await bob.locator(".call__tile[data-remote]").count()) > 0,
+    `bob=${JSON.stringify(relayState)} carol=${JSON.stringify(carolState)}\n      bob log: ${(await callLog(bob)).join(" | ")}\n      carol log: ${(await callLog(carol)).join(" | ")}\n      alice log: ${(await callLog(alice)).join(" | ")}`,
+  );
+  await bob.click("#call-hangup");
+  await sleep(bob, 1500);
 
   section("console health");
   ok("no unexpected console errors", errors.length === 0, errors.slice(0, 4).join(" | "));

@@ -37,6 +37,9 @@ export class MediaManager {
     this.nodes = null;
     this.incomingCall = null;
     this.invitedBy = null;
+    this.signalling = null;
+    /** True when this call negotiates over lcc-chat's own `call.signal` relay. */
+    this.usesRelay = false;
     this.state = "idle"; // idle | calling | connected | reconnecting | failed | closed
     this.media = "audio"; // audio | video | screen
     this.overlay = null;
@@ -100,13 +103,48 @@ export class MediaManager {
     const isDirect = conversation?.type === "dm" && peers.length === 1;
 
     try {
-      if (isDirect && window.Peer) await this.#startPeerCall(peers[0]);
-      else await this.#startMeshCall();
+      if (isDirect && window.Peer && (await this.#signallingAvailable())) {
+        this.usesRelay = false;
+        await this.#startPeerCall(peers[0]);
+      } else {
+        this.usesRelay = true;
+        // Groups always mesh, and one-to-one falls back to the same relay when
+        // the PeerJS signalling server is unreachable.
+        if (isDirect) toast("PeerJS signalling unavailable — calling over lcc-chat's own relay.", { kind: "info", timeout: 4000 });
+        await this.#startMeshCall();
+      }
     } catch (error) {
       this.#setState("failed");
-      toast(`Call failed: ${error.message}`, { kind: "error", timeout: 6000 });
+      toast(`Call failed: ${this.#friendlyError(error)}`, { kind: "error", timeout: 6000 });
       this.end("error");
     }
+  }
+
+  /** Is PeerJS actually reachable? Cached so we only pay for it once. */
+  async #signallingAvailable() {
+    if (this.signalling === null) {
+      this.signalling = this.#ensurePeer()
+        .then(() => true)
+        .catch((error) => {
+          console.warn("[lcc-chat] PeerJS signalling unavailable:", error?.message ?? error);
+          return false;
+        });
+    }
+    return this.signalling;
+  }
+
+  /** Turn transport-level errors into something a human can act on. */
+  #friendlyError(error) {
+    const type = error?.type ?? "";
+    if (type === "network" || type === "server-error" || /network/i.test(error?.message ?? "")) {
+      return "the signalling server did not respond — check your internet connection.";
+    }
+    if (type === "peer-unavailable") return "that person is not reachable right now.";
+    if (type === "browser-incompatible") return "this browser cannot make calls.";
+    if (/mediaDevices|getUserMedia|Permission|NotAllowed/i.test(error?.message ?? "")) {
+      return `microphone or camera unavailable (${error.message}).`;
+    }
+    return error?.message ?? "unknown error";
   }
 
   end(reason = "local") {
@@ -118,6 +156,8 @@ export class MediaManager {
 
     this.incomingCall?.close();
     this.incomingCall = null;
+    this.invitedBy = null;
+    this.usesRelay = false;
     this.peerCall?.connection?.close();
     this.peerCall = null;
     for (const connection of this.mesh.values()) {
@@ -382,12 +422,18 @@ export class MediaManager {
   #offerIfDesignated(remoteUserId, peer) {
     if (!this.#shouldOffer(remoteUserId)) return;
     if (this.offeredTo.has(remoteUserId)) return;
+    // Once an answer arrived the negotiation is done; before that we may
+    // replace our own local offer (the previous one was never answered).
+    if (peer.remoteDescription) return;
     this.offeredTo.add(remoteUserId);
     peer
       .createOffer()
       .then((offer) => peer.setLocalDescription(offer))
       .then(() => this.app.sendCallSignal(remoteUserId, { kind: "offer", sdp: peer.localDescription.sdp }))
-      .catch((error) => console.warn("[lcc-chat] offer failed", error));
+      .catch((error) => {
+        this.offeredTo.delete(remoteUserId);
+        console.warn("[lcc-chat] offer failed", error);
+      });
   }
 
   /**
@@ -406,6 +452,17 @@ export class MediaManager {
   /** Handle a relayed signal from another participant. */
   async handleSignal(fromUserId, payload) {
     if (!this.isBusy()) return;
+    try {
+      await this.#routeSignal(fromUserId, payload);
+    } catch (error) {
+      // Signalling races are normal (two offers at once, a peer that left
+      // mid-negotiation). Log and move on instead of breaking the call.
+      console.warn("[lcc-chat] signalling hiccup", error?.name ?? "", error?.message ?? error);
+    }
+  }
+
+  async #routeSignal(fromUserId, payload) {
+    if (!this.isBusy()) return;
 
     if (payload.kind === "bye") {
       this.#removeRemote(fromUserId);
@@ -417,8 +474,12 @@ export class MediaManager {
     }
 
     if (payload.kind === "state") {
-      // Somebody joined: make sure we hold a connection to them.
+      // Somebody joined. An offer we sent earlier may have landed while they
+      // were still idle (they would have dropped it), so re-offer when the
+      // negotiation never completed. The designated-offerer rule keeps this
+      // glare-free.
       const peer = this.#ensurePeerConnection(fromUserId);
+      if (!peer.remoteDescription) this.offeredTo.delete(fromUserId);
       this.#offerIfDesignated(fromUserId, peer);
       return;
     }
@@ -426,10 +487,13 @@ export class MediaManager {
     const peer = this.#ensurePeerConnection(fromUserId);
 
     if (payload.kind === "offer" && payload.sdp) {
-      if (peer.signalingState !== "stable") return; // glare: keep the first offer
-      this.offeredTo.delete(fromUserId);
+      // Ignore offers while we are already negotiating: a newer one is on its
+      // way and applying it is what keeps us consistent.
+      if (peer.signalingState !== "stable") return;
       await peer.setRemoteDescription({ type: "offer", sdp: payload.sdp });
       const answer = await peer.createAnswer();
+      // A newer offer may have arrived while we were building the answer.
+      if (peer.signalingState !== "have-remote-offer") return;
       await peer.setLocalDescription(answer);
       this.app.sendCallSignal(fromUserId, { kind: "answer", sdp: answer.sdp });
       return;

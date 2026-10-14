@@ -1,5 +1,5 @@
 import { el, qs, clear, avatarNode, clockTime, dayLabel, debounce } from "./dom.js";
-import { confirmDialog, toast } from "./overlays.js";
+import { confirmDialog } from "./overlays.js";
 import { otherMemberId } from "./sidebar.js";
 
 const TYPING_IDLE_MS = 4000;
@@ -79,11 +79,7 @@ export function createChatView(app) {
   function submit() {
     const content = input.value.trim();
     if (content.length === 0) return;
-    const ok = app.sendMessage(content);
-    if (!ok) {
-      toast("Still reconnecting — your message was not sent.", { kind: "error" });
-      return;
-    }
+    app.sendMessage(content);
     input.value = "";
     autosize();
     app.notifyTypingStopped();
@@ -202,6 +198,7 @@ export function createChatView(app) {
             el("p", { class: "message__text", text: message.deletedAt ? "This message was deleted." : message.content }),
             el("span", { class: "message__meta" }, [
               message.editedAt && !message.deletedAt ? el("span", { class: "message__edited", text: "edited" }) : null,
+              message.status === "queued" ? el("span", { class: "message__edited", text: "queued" }) : null,
               el("time", { text: clockTime(message.createdAt) }),
               mine && !message.deletedAt ? receiptGlyph(message, readByOthers) : null,
             ]),
@@ -216,9 +213,11 @@ export function createChatView(app) {
     if (wasEmpty || atBottom) scrollToBottom();
     renderTyping(state);
     scheduleReadReceipt(state);
+    app.connectionHint();
   }
 
   function receiptGlyph(message, readByOthers) {
+    if (message.status === "queued") return el("span", { class: "message__receipt", text: "🕓" });
     if (message.status === "pending") return el("span", { class: "message__receipt", text: "🕓" });
     if (message.status === "failed") return el("span", { class: "message__receipt", text: "⚠" });
     return el("span", {
